@@ -1,3 +1,4 @@
+
 # Autonomous AI Stock Market Agent — Progress Log
 
 ## Overview
@@ -20,7 +21,7 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 - **Prediction**: scikit-learn RandomForestRegressor, time-series cross-validation
 - **Config**: python-dotenv + config.py
 
-## Status: Prediction + Backtesting Agent Complete ✅
+## Status: Decision Agent Complete ✅
 
 | Step                                        | Status  | Notes                                                                                                             |
 | ------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -35,6 +36,7 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 | 9.**Sentiment Agent**                 | ✅ Done | See below                                                                                                         |
 | 10.**Fundamental Agent**              | ✅ Done | See below                                                                                                         |
 | 11.**Prediction + Backtesting Agent** | ✅ Done | See below                                                                                                         |
+| 12.**Decision Agent**                 | ✅ Done | See below                                                                                                         |
 
 ### Technical Agent — `agents/technical_agent.py`
 
@@ -88,12 +90,35 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
   - **Result: overall directional accuracy = 0.500 (exactly a coin flip)**, mean absolute error = 1.037%.
   - Per-stock accuracy ranged from 0.429 (INFY — worse than random) to 0.589 (TCS), consistent with sampling noise around a true null result rather than genuine per-stock skill.
   - **Conclusion**: a Random Forest trained on technical indicators alone has no meaningful predictive edge on next-day price direction for these stocks — consistent with market-efficiency expectations for short-horizon technical-only prediction. Documented as an honest finding rather than tuned away.
-  - Implication for the upcoming Decision Agent: Prediction Agent output should be weighted low/skeptically relative to Fundamental and Sentiment signals, which is exactly what a Decision Agent is for.
+  - Implication for the Decision Agent: Prediction Agent output should be weighted low/skeptically relative to Fundamental and Sentiment signals, which is exactly what the Decision Agent's risk rules do.
 - Run as a module from project root: `python -m agents.prediction_agent` (live prediction), `python backtest_prediction_agent.py` (evaluation only, does not write to `predictions` table)
+
+### Decision Agent — `agents/decision_agent.py`
+
+- `fetch_latest_signals(symbol)` — pulls the latest row from `technical_indicators`, `fundamentals`, `sentiment_scores`, `predictions`, and `price_history` (for latest close, needed for ATR% and stop-loss/target-price math) via SQLAlchemy `engine` + `text()`, same style as the other agents; reuses `get_or_create_stock()`
+- `apply_risk_rules(signals)` — hard-coded risk-rule engine that combines the four signals into a verdict:
+  - Base weights: fundamentals 0.40, technical 0.25, sentiment 0.20, prediction 0.15 — prediction deliberately underweighted given the backtested 0.500 (coin-flip) accuracy
+  - Stale data (>48h old) halves that signal's weight
+  - Missing critical fundamentals (PE/ROE/D-E) caps conviction at moderate (0.5)
+  - Fundamentals vs. sentiment strongly disagreeing dampens conviction
+  - High volatility (ATR >4% of latest close) reduces conviction
+  - A decision resting almost entirely on the Prediction signal is capped low (0.3), since it has no real standalone edge
+  - Produces verdict: `STRONG_BUY` / `BUY` / `HOLD` / `SELL` / `STRONG_SELL`, plus an ATR-based `stop_loss`/`target_price` (only set for non-HOLD verdicts)
+- `save_decision(decision, stock_id)` — persists to `agent_decisions` (`verdict`, `reasoning`, `stop_loss`, `target_price`, `signals_used` as `jsonb` containing the full per-signal score/weight/risk-flag trail)
+- `decision_tool` — wrapped as a CrewAI `@tool` ("Decision Analysis Tool")
+- **Real schema differences from initial assumptions**: `technical_indicators` uses `rsi_14`/`timestamp` and has no close price column; `fundamentals` uses `fetched_at`; `sentiment_scores` uses `score`/`confidence`/`computed_at`; `agent_decisions` uses `verdict`/`reasoning`/`stop_loss`/`target_price`/`signals_used` (jsonb), not a `conviction`/`raw_score` column pair as first assumed — queries and inserts rewritten to match the real schema
+- **`price_history` was empty** — added `agents/backfill_price_history.py` (yfinance, `.NS`/`.BO` fallback, dedup on `stock_id`+`timestamp`) and backfilled 125 rows each for TCS, RELIANCE, INFY, HDFCBANK, ITC
+- **Bug fixed — Decimal/float mismatch**: Postgres `numeric` columns come back as `decimal.Decimal` via SQLAlchemy, which doesn't mix with `float` arithmetic in the scoring functions. Fixed with a `_row_to_float_dict()` helper that casts every numeric field to `float` right after fetching
+- Verified end-to-end on all 5 stocks:
+  - **RELIANCE** → `BUY`, conviction 0.417, stop-loss 1277.52 / target 1348.48, correctly flagged missing critical fundamentals as capping conviction
+  - **TCS** → `HOLD`, conviction 0.341 (below the 0.4 threshold needed for a BUY call)
+  - **INFY / HDFCBANK / ITC** → `HOLD` with a "no usable signals at all" flag, since those three stocks haven't been run through the upstream Technical/Fundamental/Sentiment/Prediction agents yet (a data-coverage gap, not a Decision Agent bug)
+- Tested via `test_decision_agent_crew.py`: a real CrewAI Agent + Task + Crew explains the decision in plain English without ever overriding the verdict, conviction, stop-loss, or target-price. Explicit instructions require it to state risk flags and stale/missing data plainly rather than soften them. Verified on RELIANCE — agent correctly named technical + fundamentals as the drivers, stated the missing-fundamentals risk flag directly, and reported conviction/stop-loss/target accurately
+- Run as a module from project root: `python -m agents.decision_agent [SYMBOL]` (defaults to TCS), `python -m agents.test_decision_agent_crew [SYMBOL]` (defaults to RELIANCE)
 
 ## Next Up
 
-- **Decision Agent** — combine Technical, Fundamental, Sentiment, and Prediction signals into a single buy/hold/sell-style call with risk rules, informed by the Prediction Agent's backtested (lack of) standalone edge
+- **Orchestrator** — tie Technical → News → Sentiment → Fundamental → Prediction → Decision into a single automatic run per stock (and eventually per watchlist, on a schedule)
 
 ## Remaining Build Order
 
@@ -102,8 +127,8 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 3. ~~News + Sentiment Agents~~ ✅
 4. ~~Fundamental Agent~~ ✅
 5. ~~Prediction Agent + Backtesting~~ ✅
-6. Decision Agent with risk rules ← **next**
-7. Orchestrator (scheduling, parallel/sequential agent coordination)
+6. ~~Decision Agent with risk rules~~ ✅
+7. Orchestrator (scheduling, parallel/sequential agent coordination) ← **next**
 8. Streamlit dashboard + Telegram alerts
 
 ## Issues Hit & Resolved
@@ -115,6 +140,9 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 - **dividend_yield miscalculated in Fundamental Agent**: yfinance's `dividendYield` is already a percent, not a fraction — see Fundamental Agent section above for the diagnosis and fix.
 - **`inf` values crashing sklearn in Prediction Agent**: zero-volume days produced infinite values via `pct_change()` on volume; fixed by replacing `inf`/`-inf` with `NaN` before training.
 - **R²-based prediction confidence was uninformative (always ~0)**: replaced with directional accuracy from time-series cross-validation, which is far more interpretable for this problem.
+- **Decision Agent queries failed against real schema**: initial `decision_agent.py` was written against assumed column names (`rsi`, `sma_50`, `avg_sentiment`, `close_price`, `conviction`/`raw_score` in `agent_decisions`). Fixed by pulling actual column names via `information_schema.columns` and rewriting every query to match.
+- **`decimal.Decimal` breaking float arithmetic in risk scoring**: Postgres `numeric` columns return as `Decimal` via SQLAlchemy; mixing with `float` in the risk-rule scoring functions raised `TypeError`. Fixed with a row-level float-casting helper applied right after fetch.
+- **`price_history` table was empty**, blocking ATR%/stop-loss/target-price calculation in the Decision Agent. Fixed with a standalone `backfill_price_history.py` script.
 
 ## Notes
 
