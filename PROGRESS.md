@@ -29,14 +29,15 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 | 2. Core dependencies                        | ✅ Done | crewai, yfinance, pandas, ta, psycopg2-binary, python-dotenv, sqlalchemy, scikit-learn                            |
 | 3. PostgreSQL setup                         | ✅ Done | Postgres 17.10 already installed; skipped TimescaleDB for now                                                     |
 | 4. DB schema                                | ✅ Done | 7 tables: stocks, price_history, news_items, sentiment_scores, technical_indicators, predictions, agent_decisions |
-| 5.`.env` + config layer                   | ✅ Done | DB creds + GEMINI_API_KEY                                                                                         |
+| 5.`.env` + config layer                     | ✅ Done | DB creds + GEMINI_API_KEY                                                                                         |
 | 6. Hello agent (CrewAI wiring test)         | ✅ Done | Confirmed working end-to-end with Gemini 2.5 Flash                                                                |
-| 7.**Technical Agent**                 | ✅ Done | See below                                                                                                         |
-| 8.**News Agent**                      | ✅ Done | See below                                                                                                         |
-| 9.**Sentiment Agent**                 | ✅ Done | See below                                                                                                         |
-| 10.**Fundamental Agent**              | ✅ Done | See below                                                                                                         |
-| 11.**Prediction + Backtesting Agent** | ✅ Done | See below                                                                                                         |
-| 12.**Decision Agent**                 | ✅ Done | See below                                                                                                         |
+| 7.**Technical Agent**                       | ✅ Done | See below                                                                                                         |
+| 8.**News Agent**                            | ✅ Done | See below                                                                                                         |
+| 9.**Sentiment Agent**                       | ✅ Done | See below                                                                                                         |
+| 10.**Fundamental Agent**                    | ✅ Done | See below                                                                                                         |
+| 11.**Prediction + Backtesting Agent**       | ✅ Done | See below                                                                                                         |
+| 12.**Decision Agent**                       | ✅ Done | See below  
+| 13. **Orchestrator**                        | ✅ Done | See                                         below                                                                                                         |                                                                                                       |
 
 ### Technical Agent — `agents/technical_agent.py`
 
@@ -116,10 +117,24 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 - Tested via `test_decision_agent_crew.py`: a real CrewAI Agent + Task + Crew explains the decision in plain English without ever overriding the verdict, conviction, stop-loss, or target-price. Explicit instructions require it to state risk flags and stale/missing data plainly rather than soften them. Verified on RELIANCE — agent correctly named technical + fundamentals as the drivers, stated the missing-fundamentals risk flag directly, and reported conviction/stop-loss/target accurately
 - Run as a module from project root: `python -m agents.decision_agent [SYMBOL]` (defaults to TCS), `python -m agents.test_decision_agent_crew [SYMBOL]` (defaults to RELIANCE)
 
+## Status: Orchestrator Complete ✅
+### Orchestrator — `agents/orchestrator.py`
+
+- Runs the full pipeline for one or more stocks: Technical → News → Sentiment → Fundamental → Prediction → Decision
+- The first 5 stages call each agent's plain functions directly (no LLM) — they're pure fetch/save operations and don't need reasoning:
+  - `run_technical`, `run_news`, `run_sentiment`, `run_fundamental`, `run_prediction`, `run_decision`
+- Each stage wrapped in try/except so one failing stage doesn't kill the rest of the pipeline for that stock, and one failing stock doesn't stop the rest of the watchlist
+- **Cost-aware design**: the Decision Agent's LLM explanation (`test_decision_agent_crew.py`'s `crew`) only runs for non-HOLD verdicts (`explain_non_hold=True` by default), imported lazily inside `run_watchlist()` so it's not even loaded unless needed — avoids burning Gemini free-tier quota explaining routine HOLD calls on every scheduled run
+- `run_watchlist(symbols, company_names=None, explain_non_hold=True)` — main entry point, loops over a list of symbols and prints a per-stock summary at the end
+- Verified end-to-end on all 5 stocks (TCS, RELIANCE, INFY, HDFCBANK, ITC): all 5 stages succeeded for every stock, Decision computed for all 5 (all landed on HOLD on this particular run — a legitimate outcome, not a bug). INFY/HDFCBANK/ITC — which previously had no data in Technical/Fundamental/Sentiment/Prediction tables — now have real signals feeding into their Decision output
+- The non-HOLD explanation path (lazy import of `test_decision_agent_crew`) wasn't exercised by that run since everything was HOLD; verified separately by calling `crew.kickoff()` directly for RELIANCE — confirmed working, correctly explained a HOLD verdict including the missing-fundamentals risk flag
+- Run as a module from project root: `python -m agents.orchestrator [SYMBOL ...]` (defaults to TCS RELIANCE INFY HDFCBANK ITC if no symbols given)
+
+
+
 ## Next Up
 
-- **Orchestrator** — tie Technical → News → Sentiment → Fundamental → Prediction → Decision into a single automatic run per stock (and eventually per watchlist, on a schedule)
-
+- **Streamlit dashboard + Telegram alerts** — surface the pipeline's output (verdicts, conviction, stop-loss/target, explanations) somewhere visible instead of terminal output only
 ## Remaining Build Order
 
 1. ~~Feature store schema~~ ✅
@@ -128,8 +143,8 @@ Follow-up project to [stock-price-mcp-server](https://github.com/Ashok1921/stock
 4. ~~Fundamental Agent~~ ✅
 5. ~~Prediction Agent + Backtesting~~ ✅
 6. ~~Decision Agent with risk rules~~ ✅
-7. Orchestrator (scheduling, parallel/sequential agent coordination) ← **next**
-8. Streamlit dashboard + Telegram alerts
+7. ~~Orchestrator~~ ✅
+8. Streamlit dashboard + Telegram alerts ← **next**
 
 ## Issues Hit & Resolved
 
