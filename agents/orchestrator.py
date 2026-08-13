@@ -28,7 +28,7 @@ from agents.sentiment_agent import get_recent_headlines, score_headlines, save_s
 from agents.fundamental_agent import fetch_fundamentals, save_fundamentals
 from agents.prediction_agent import train_and_predict, save_prediction
 from agents.decision_agent import fetch_latest_signals, apply_risk_rules, save_decision
-
+from agents.telegram_alerts import send_telegram_alert
 
 # ---------------------------------------------------------------------------
 # Individual stage runners -- plain function calls, no LLM
@@ -112,6 +112,9 @@ def run_pipeline_for_stock(symbol: str, company_name: str = None) -> dict:
     except Exception as e:
         print(f"  [FAIL] Decision: {e}")
         errors.append(("Decision", str(e)))
+        
+    if decision:
+        send_telegram_alert(symbol, decision)
 
     return {"symbol": symbol, "decision": decision, "errors": errors}
 
