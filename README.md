@@ -1,4 +1,3 @@
-
 # 📈 Autonomous Stock Market Agent
 
 A fully autonomous, multi-agent AI system that analyzes Indian stocks (NSE/BSE) and produces
@@ -27,8 +26,6 @@ News ──────┼─→ Sentiment ─┐
 Fundamental┤              ├─→ Decision Agent ─→ Orchestrator ─┬─→ Dashboard
 
 Prediction ┘              ┘                                   └─→ Telegram Alert
-
-
 
 ## Agents
 
@@ -60,14 +57,10 @@ lowest (0.15) of the four signals, and further discounted when its own confidenc
 This is a real, structural finding about short-horizon technical-only prediction, not a bug —
 and the system is built to be honest about it rather than oversell it.
 
-
-
-
 ## Screenshots
 
 ![Dashboard watchlist overview](screenshots/dashboard-overview.png)
-
-![1786679411715](image/README/1786679411715.png)
+![Dashboard watchlist overview](screenshots/dashboard-overview1.png)
 
 ## Running Locally
 
