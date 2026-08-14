@@ -9,17 +9,66 @@ from agents.technical_agent import get_or_create_stock  # reuse existing helper
 engine = create_engine(DATABASE_URL)
 
 
+def _compute_roe_roa_fallback(ticker):
+    """Compute ROE/ROA manually from raw financials when .info lacks them."""
+    try:
+        financials = ticker.financials
+        balance_sheet = ticker.balance_sheet
+        if financials.empty or balance_sheet.empty:
+            return None, None
+
+        net_income = financials.loc["Net Income"].iloc[0]
+        total_equity = balance_sheet.loc["Stockholders Equity"].iloc[0]
+        total_assets = balance_sheet.loc["Total Assets"].iloc[0]
+
+        roe = round(float(net_income) / float(total_equity) * 100, 2) if total_equity else None
+        roa = round(float(net_income) / float(total_assets) * 100, 2) if total_assets else None
+        return roe, roa
+    except Exception:
+        return None, None
+
+
+def _compute_current_ratio_fallback(ticker):
+    """Compute current ratio manually from balance sheet."""
+    try:
+        balance_sheet = ticker.balance_sheet
+        if balance_sheet.empty:
+            return None
+        current_assets = balance_sheet.loc["Current Assets"].iloc[0]
+        current_liabilities = balance_sheet.loc["Current Liabilities"].iloc[0]
+        return round(float(current_assets) / float(current_liabilities), 2) if current_liabilities else None
+    except Exception:
+        return None
+
+
+def _compute_free_cashflow_fallback(ticker):
+    """Compute free cash flow manually: Operating Cash Flow - CapEx."""
+    try:
+        cashflow = ticker.cashflow
+        if cashflow.empty:
+            return None
+        operating_cf = cashflow.loc["Operating Cash Flow"].iloc[0]
+        capex = cashflow.loc["Capital Expenditure"].iloc[0]  # usually negative already
+        return float(operating_cf) + float(capex)
+    except Exception:
+        return None
+
+
 def fetch_fundamentals(symbol: str) -> dict:
     """
     Fetch fundamental data for a stock using yfinance's .info dict.
     Tries .NS (NSE) first, falls back to .BO (BSE) — same pattern as technical_agent.
+    Falls back to computing ROE/ROA/current_ratio/free_cashflow manually from
+    raw financial statements when .info doesn't have them (common for Indian tickers).
     """
+    ticker = None
     for suffix in (".NS", ".BO"):
-        ticker = yf.Ticker(f"{symbol}{suffix}")
-        info = ticker.info
+        candidate = yf.Ticker(f"{symbol}{suffix}")
+        info = candidate.info
         if info and info.get("regularMarketPrice") is not None:
+            ticker = candidate
             break
-    else:
+    if ticker is None:
         raise ValueError(f"No fundamental data found for {symbol} on NSE or BSE")
 
     def pct(x):
@@ -30,14 +79,32 @@ def fetch_fundamentals(symbol: str) -> dict:
         # over 1 as already a percent.
         return round(x, 2) if x > 1 else round(x * 100, 2)
 
+    roe = pct(info.get("returnOnEquity"))
+    roa = pct(info.get("returnOnAssets"))
+    current_ratio = info.get("currentRatio")
+    free_cashflow = info.get("freeCashflow")
+
+    # Fall back to computing from raw financials when .info is missing these
+    # (common gap for Indian NSE/BSE tickers via yfinance)
+    if roe is None or roa is None:
+        fallback_roe, fallback_roa = _compute_roe_roa_fallback(ticker)
+        roe = roe if roe is not None else fallback_roe
+        roa = roa if roa is not None else fallback_roa
+
+    if current_ratio is None:
+        current_ratio = _compute_current_ratio_fallback(ticker)
+
+    if free_cashflow is None:
+        free_cashflow = _compute_free_cashflow_fallback(ticker)
+
     return {
         "pe_ratio": info.get("trailingPE"),
         "forward_pe": info.get("forwardPE"),
         "eps": info.get("trailingEps"),
         "peg_ratio": info.get("pegRatio"),
         "debt_to_equity": info.get("debtToEquity"),
-        "roe": pct(info.get("returnOnEquity")),
-        "roa": pct(info.get("returnOnAssets")),
+        "roe": roe,
+        "roa": roa,
         "market_cap": info.get("marketCap"),
         # dividendYield from yfinance is already a percent (e.g. 2.65 = 2.65%) — don't run through pct()
         "dividend_yield": round(info.get("dividendYield"), 2) if isinstance(info.get("dividendYield"), (int, float)) else None,
@@ -45,8 +112,8 @@ def fetch_fundamentals(symbol: str) -> dict:
         "price_to_book": info.get("priceToBook"),
         "revenue_growth": pct(info.get("revenueGrowth")),
         "profit_margin": pct(info.get("profitMargins")),
-        "current_ratio": info.get("currentRatio"),
-        "free_cashflow": info.get("freeCashflow"),
+        "current_ratio": current_ratio,
+        "free_cashflow": free_cashflow,
     }
 
 
