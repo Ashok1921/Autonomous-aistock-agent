@@ -5,15 +5,17 @@ Live dashboard for the autonomous stock agent pipeline.
 
 Run as: streamlit run dashboard.py
 """
-
+import os
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from datetime import datetime
 
-from agents.orchestrator import run_pipeline_for_stock
+
 from sqlalchemy import create_engine
 from config import DATABASE_URL
+
+DEPLOY_MODE = os.getenv("DEPLOY_MODE", "false").lower() == "true"
 
 engine = create_engine(DATABASE_URL)
 
@@ -39,16 +41,20 @@ st.sidebar.header("Controls")
 selected_symbol = st.sidebar.selectbox("Select stock", WATCHLIST)
 run_all = st.sidebar.checkbox("Run for all 5 stocks", value=False)
 
-if st.sidebar.button("🚀 Run Pipeline Now"):
-    targets = WATCHLIST if run_all else [selected_symbol]
-    for sym in targets:
-        with st.spinner(f"Running pipeline for {sym}..."):
-            result = run_pipeline_for_stock(sym)
-        if result["errors"]:
-            st.sidebar.warning(f"{sym}: {len(result['errors'])} stage error(s) — {result['errors']}")
-        else:
-            st.sidebar.success(f"{sym}: pipeline complete")
-    st.rerun()
+if DEPLOY_MODE:
+    st.sidebar.info("🔒 Live pipeline runs are disabled on this hosted demo (resource limits). Showing latest saved data. Run locally for live analysis.")
+else:
+    if st.sidebar.button("🚀 Run Pipeline Now"):
+        from agents.orchestrator import run_pipeline_for_stock
+        targets = WATCHLIST if run_all else [selected_symbol]
+        for sym in targets:
+            with st.spinner(f"Running pipeline for {sym}..."):
+                result = run_pipeline_for_stock(sym)
+            if result["errors"]:
+                st.sidebar.warning(f"{sym}: {len(result['errors'])} stage error(s) — {result['errors']}")
+            else:
+                st.sidebar.success(f"{sym}: pipeline complete")
+        st.rerun()
 
 st.sidebar.caption(f"Last refreshed: {datetime.now().strftime('%H:%M:%S')}")
 
